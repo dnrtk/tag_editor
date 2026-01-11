@@ -9,6 +9,7 @@ use crate::file_tree::{FileNode, FileTree};
 use crate::image_viewer::ImageViewer;
 use crate::slideshow::Slideshow;
 use crate::tag_manager::{self, find_images_with_tag, is_image_file};
+use image as image_crate;
 
 pub struct TagEditorApp {
     inner: Rc<RefCell<InnerApp>>,
@@ -49,6 +50,10 @@ struct InnerApp {
     // ウィンドウ開閉状態追跡用
     was_left_sidebar_open: bool,
     was_right_sidebar_open: bool,
+    /// 現在表示中のテクスチャ（spinner を出さないため同期で読み込む）
+    current_texture: Option<egui::TextureHandle>,
+    /// current_texture に対応する画像パス
+    current_texture_path: Option<PathBuf>,
 }
 
 impl TagEditorApp {
@@ -94,6 +99,8 @@ impl TagEditorApp {
             status_message: String::new(),
             was_left_sidebar_open: false,
             was_right_sidebar_open: false,
+            current_texture: None,
+            current_texture_path: None,
         };
 
         // 初期パスが指定されていれば開く
@@ -141,6 +148,9 @@ impl InnerApp {
     fn open_image(&mut self, path: PathBuf) {
         // 変更があれば確認せずに破棄（オートセーブがオフの場合は注意）
         self.image_viewer.open(&path);
+        // キャッシュされているテクスチャは新しい画像に合わせて破棄
+        self.current_texture = None;
+        self.current_texture_path = None;
         self.current_tags = tag_manager::load_tags(&path);
         self.tags_modified = false;
         self.status_message = format!("Opened: {}", path.display());
@@ -275,6 +285,8 @@ impl InnerApp {
             } else {
                 // 画像がなくなった
                 self.image_viewer.close();
+                self.current_texture = None;
+                self.current_texture_path = None;
             }
             
              self.current_tags.clear();
@@ -417,16 +429,46 @@ impl InnerApp {
     }
 
     fn show_center_panel(&mut self, ui: &mut egui::Ui) {
-        if let Some(uri) = self.image_viewer.get_texture_uri() {
-            let available = ui.available_size();
+        if let Some(path) = &self.image_viewer.current_image {
+            // テクスチャが未ロード、または別画像になっていれば同期で読み込む
+            let need_load = match &self.current_texture_path {
+                Some(p) => p != path,
+                None => true,
+            };
 
-            // 画像を表示
-            let image = egui::Image::new(uri).fit_to_exact_size(available);
+            if need_load {
+                match image_crate::open(path) {
+                    Ok(img) => {
+                        let img = img.to_rgba8();
+                        let (w, h) = img.dimensions();
+                        let pixels = img.into_raw();
+                        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                            [w as usize, h as usize],
+                            &pixels,
+                        );
+                        let ctx = ui.ctx();
+                        // Texture 名にパスを使う（ユニーク）
+                        let tex = ctx.load_texture(path.display().to_string(), color_image, egui::TextureOptions::default());
+                        self.current_texture = Some(tex);
+                        self.current_texture_path = Some(path.clone());
+                    }
+                    Err(_) => {
+                        self.current_texture = None;
+                        self.current_texture_path = None;
+                    }
+                }
+            }
 
-            let response = ui.add(image);
-
-            // ホットキータグのオーバーレイ表示
-            self.show_hotkey_overlay(ui, response.rect);
+            if let Some(tex) = &self.current_texture {
+                let available = ui.available_size();
+                let image = egui::Image::new(tex).fit_to_exact_size(available);
+                let response = ui.add(image);
+                self.show_hotkey_overlay(ui, response.rect);
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.heading("🖼 Failed to load image");
+                });
+            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.heading("🖼 Drop an image or folder here");
