@@ -3,16 +3,23 @@
 mod app;
 mod config;
 mod file_tree;
+mod filter;
 mod image_viewer;
+mod input;
+mod metadata;
 mod slideshow;
-mod tag_manager;
+mod state;
+mod thumbnail_cache;
+mod ui;
+mod web;
 
 use app::TagEditorApp;
 use eframe::egui;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {
-    // コマンドライン引数から初期パスを取得（exeへのD&Dで渡される）
+    // The first CLI argument is the path the OS hands us when the user drops a file
+    // onto the executable.
     let initial_path: Option<PathBuf> = std::env::args()
         .nth(1)
         .map(PathBuf::from)

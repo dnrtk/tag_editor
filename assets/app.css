@@ -1,0 +1,312 @@
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  font-family: "Meiryo UI", "Yu Gothic UI", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+button, input, select {
+  background: #2a2a2a;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: inherit;
+}
+button { cursor: pointer; }
+button:hover { background: #383838; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input[type="text"], input[type="number"] { padding: 4px 8px; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #181818;
+  border-bottom: 1px solid #333;
+  flex-wrap: wrap;
+}
+.topbar .title { font-weight: bold; font-size: 16px; }
+.path-input-wrap { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 320px; }
+.path-input-wrap input { flex: 1; min-width: 0; }
+.status { color: #aaa; font-size: 12px; min-width: 200px; text-align: right; }
+
+.layout {
+  /* --left-w is updated by the JS splitter; persisted to localStorage. */
+  --left-w: 240px;
+  display: grid;
+  grid-template-columns: var(--left-w) 5px minmax(0, 1fr) 320px;
+  height: calc(100vh - 56px);
+}
+@media (max-width: 1024px) {
+  .layout { --left-w: 200px; grid-template-columns: var(--left-w) 5px minmax(0, 1fr) 280px; }
+}
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto auto;
+    height: auto;
+  }
+  .splitter { display: none; }
+}
+
+.splitter {
+  background: #2c2c2c;
+  cursor: ew-resize;
+  user-select: none;
+}
+.splitter:hover, .splitter.dragging { background: #5a8acc; }
+
+.pane {
+  padding: 12px;
+  /* Vertical scroll only — long filenames are truncated horizontally rather
+     than triggering a horizontal scrollbar. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* In a CSS grid, the default min-width:auto would let item content force the
+     track wider than its declared size, defeating truncation. Explicit 0 lets
+     children with overflow:hidden / text-overflow:ellipsis actually clip. */
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid #2c2c2c;
+}
+.pane.right { border-right: none; border-left: 1px solid #2c2c2c; }
+.pane h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; color: #b0b0b0; }
+.pane h3 { margin: 12px 0 6px; font-size: 12px; text-transform: uppercase; color: #888; border-top: 1px solid #2c2c2c; padding-top: 8px; }
+
+.parent-link { margin-bottom: 6px; font-size: 12px; }
+.parent-link a {
+  color: #6cb6ff;
+  cursor: pointer;
+  text-decoration: underline;
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.dir-list, .file-list, .tag-list, .hotkey-list, .filter-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.dir-list li, .file-list li, .filter-list li.name {
+  /* Truncate long names with an ellipsis instead of wrapping. The sidebar is
+     resizable so users can widen the column to reveal hidden text. */
+  display: block;
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.dir-list li:hover, .file-list li:hover, .filter-list li:hover { background: #2c2c2c; }
+.file-list li.current { background: #3a4a5a; font-weight: bold; }
+
+.center {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.image-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 8px;
+  min-width: 0;
+}
+.image-toolbar #image-name {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  color: #ccc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.image-frame {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+  border-radius: 4px;
+  min-height: 300px;
+  min-width: 0;
+  overflow: hidden;
+}
+.image-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.image-frame img:not([src]),
+.image-frame img[src=""] {
+  display: none;
+}
+
+.tag-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px;
+  min-width: 0;
+}
+.tag-list li > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tag-list li button {
+  background: transparent;
+  border: 1px solid #555;
+  padding: 1px 6px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.tag-add { display: flex; gap: 4px; margin-top: 8px; }
+.tag-add input { flex: 1; min-width: 0; }
+#save-btn { width: 100%; margin-top: 8px; }
+
+.hotkey-list li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+.hotkey-list li > span:not(.key) {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hotkey-list .key {
+  background: #383838;
+  border: 1px solid #555;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  min-width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.hotkey-list button.apply {
+  background: transparent;
+  border: 1px solid #4a7a4a;
+  padding: 1px 6px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.slideshow-config .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.slideshow-config label { display: flex; gap: 4px; align-items: center; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.chip {
+  border: 1px solid #555;
+  padding: 2px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+.chip.selected { background: #3a5a8a; border-color: #6cb6ff; }
+.muted { color: #888; font-size: 12px; margin: 4px 0; }
+
+.filter-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #2c2c2c;
+  border-radius: 4px;
+  padding: 4px;
+}
+/* Thumbnail-only mode: tile-grid layout with no filename label. The full name is
+   surfaced via the title attribute (browser tooltip). Class-based selector
+   instead of :has() for broader browser support. */
+.filter-list.thumbs-mode {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 72px);
+  gap: 4px;
+  justify-content: start;
+}
+.filter-list li.thumb {
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #111;
+  display: block;
+}
+.filter-list li.thumb:hover { outline: 2px solid #5a8acc; background: #222; }
+.filter-list li.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.filter-list li.name {
+  font-size: 12px;
+}
+
+/* -----------------------------------------------------------------------------
+   Floating slideshow setup panel. Mirrors the desktop's separate-window dialog:
+   draggable via the header, closeable, and persists position in localStorage.
+   ----------------------------------------------------------------------------- */
+.floating {
+  position: fixed;
+  top: 80px;
+  left: 200px;
+  width: 480px;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 40px);
+  background: #232323;
+  border: 1px solid #444;
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+.floating.hidden { display: none; }
+.floating-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #181818;
+  border-bottom: 1px solid #333;
+  border-radius: 6px 6px 0 0;
+  cursor: move;
+  user-select: none;
+}
+.floating-header span { font-weight: bold; }
+.floating-close {
+  background: transparent;
+  border: none;
+  color: #ccc;
+  font-size: 14px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.floating-close:hover { color: #fff; background: #444; }
+.floating-body {
+  padding: 10px;
+  overflow-y: auto;
+  min-height: 0;
+}

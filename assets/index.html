@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tag Editor</title>
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<header class="topbar">
+  <span class="title">🖼 Tag Editor</span>
+  <span class="path-input-wrap">
+    <label for="path-input">Path:</label>
+    <input id="path-input" type="text" placeholder="C:\path\to\folder" />
+    <button id="path-go">Open</button>
+  </span>
+  <span class="status" id="status"></span>
+</header>
+
+<main class="layout">
+  <aside class="pane left">
+    <h2>Files</h2>
+    <div class="parent-link" id="parent-link"></div>
+    <ul id="dir-list" class="dir-list"></ul>
+    <h3>Images</h3>
+    <ul id="file-list" class="file-list"></ul>
+  </aside>
+
+  <div class="splitter" id="splitter-left" title="Drag to resize"></div>
+
+  <section class="pane center">
+    <div class="image-toolbar">
+      <button id="prev-btn">◀ Prev</button>
+      <span id="image-name"></span>
+      <button id="next-btn">Next ▶</button>
+    </div>
+    <div class="image-frame">
+      <img id="viewer" alt="" />
+    </div>
+  </section>
+
+  <aside class="pane right">
+    <h2>Tags</h2>
+    <ul id="tag-list" class="tag-list"></ul>
+    <div class="tag-add">
+      <input id="new-tag" type="text" placeholder="new tag" />
+      <button id="add-btn">+</button>
+    </div>
+    <button id="save-btn">💾 Save</button>
+
+    <h3>Hotkeys</h3>
+    <ul id="hotkey-list" class="hotkey-list"></ul>
+
+    <h3>Slideshow</h3>
+    <div class="row">
+      <button id="slideshow-open">▶ Slideshow Setup...</button>
+      <button id="stop-btn">■ Stop</button>
+    </div>
+  </aside>
+</main>
+
+<!-- Floating slideshow setup. Hidden by default; opened via the right-sidebar button.
+     The header is a drag handle so the panel can be moved anywhere within the
+     viewport, mirroring the desktop's separate-window behavior. -->
+<div class="floating hidden" id="slideshow-popup" role="dialog" aria-label="Slideshow Setup">
+  <div class="floating-header" id="slideshow-popup-header">
+    <span>▶ Slideshow Setup</span>
+    <button class="floating-close" id="slideshow-close" title="Close">✕</button>
+  </div>
+  <div class="floating-body">
+    <div class="slideshow-config">
+      <div id="hotkey-chips" class="chips"></div>
+      <div class="row">
+        <input id="filter-q" type="text" placeholder="Free word" />
+      </div>
+      <div class="row">
+        <label>Interval (s) <input id="interval" type="number" value="3" min="0.5" step="0.5" /></label>
+        <label><input id="loop" type="checkbox" checked /> Loop</label>
+      </div>
+      <div class="row">
+        <label>View
+          <select id="view-mode">
+            <option value="names">Names</option>
+            <option value="thumbs">Thumbnails</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <button id="filter-btn">Refresh list</button>
+        <button id="start-btn">▶ Start</button>
+      </div>
+      <div id="filter-count" class="muted"></div>
+      <ul id="filter-list" class="filter-list"></ul>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
