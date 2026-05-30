@@ -36,6 +36,8 @@ pub fn dispatch(mut request: Request, state: &Arc<ServerState>) {
         (Method::Post, "/api/tags") => Some(handlers::put_tags(&mut request, query)),
         (Method::Get, "/api/hotkeys") => Some(handlers::hotkeys(state)),
         (Method::Get, "/api/filter") => Some(handlers::filter(query)),
+        (Method::Get, "/api/search") => Some(handlers::search(query)),
+        (Method::Post, "/api/export") => Some(handlers::export(&mut request)),
         _ => None,
     };
 

@@ -181,6 +181,110 @@ mod tests {
         );
     }
 
+    /// The page must contain the floating search popup container and the JS must
+    /// carry the search/export wiring it depends on.
+    #[test]
+    fn html_and_js_contain_search_feature() {
+        let html = http_get("/");
+        assert!(html.contains("id=\"search-popup\""), "missing search popup");
+        assert!(html.contains("id=\"search-open\""), "missing search trigger");
+        assert!(html.contains("id=\"search-popup-header\""), "missing drag handle");
+        assert!(html.contains("id=\"search-export\""), "missing export button");
+
+        let js = http_get("/static/app.js");
+        assert!(js.contains("openSearchPopup"), "missing openSearchPopup");
+        assert!(js.contains("doSearch"), "missing doSearch");
+        assert!(js.contains("doExport"), "missing doExport");
+    }
+
+    /// End-to-end: recursively search a tree for a tagged image, then bulk-export
+    /// the result and confirm the subfolder structure is preserved on copy.
+    #[test]
+    fn search_and_export_round_trip() {
+        use crate::metadata;
+        use image::{ImageBuffer, Rgb};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path().join("lib");
+        let dest = tmp.path().join("exported");
+        let tagged = base.join("animals/cat.png");
+        let other = base.join("misc/plain.png");
+        for p in [&tagged, &other] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            ImageBuffer::<Rgb<u8>, _>::from_fn(4, 4, |x, _| Rgb([x as u8, 0, 0]))
+                .save(p)
+                .unwrap();
+        }
+        metadata::save_tags(&tagged, &["cat".to_string()]).unwrap();
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind ephemeral");
+        let addr = server.server_addr().to_ip().expect("ip addr");
+        let server = Arc::new(server);
+        let state = Arc::new(ServerState::new(Config::default()));
+        let server_clone = server.clone();
+        let state_clone = state.clone();
+        thread::spawn(move || run(server_clone, state_clone));
+
+        let search_url = format!(
+            "/api/search?path={}&tags=cat",
+            urlencode(&base.display().to_string())
+        );
+        let resp = raw_request(addr, "GET", &search_url, None);
+        assert!(resp.starts_with("HTTP/1.1 200"), "search resp: {}", resp);
+        assert!(resp.contains("cat.png"), "tagged file missing: {}", resp);
+        assert!(!resp.contains("plain.png"), "untagged file leaked: {}", resp);
+
+        let body = format!(
+            "{{\"base\":{:?},\"dest\":{:?},\"files\":[{:?}]}}",
+            base.display().to_string(),
+            dest.display().to_string(),
+            tagged.display().to_string()
+        );
+        let resp = raw_request(addr, "POST", "/api/export", Some(&body));
+        assert!(resp.starts_with("HTTP/1.1 200"), "export resp: {}", resp);
+        assert!(resp.contains("\"copied\":1"), "copied count: {}", resp);
+        assert!(
+            dest.join("animals/cat.png").is_file(),
+            "structure not preserved on export"
+        );
+
+        server.unblock();
+    }
+
+    fn urlencode(s: &str) -> String {
+        s.chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' | '/' => c.to_string(),
+                _ => format!("%{:02X}", c as u32),
+            })
+            .collect()
+    }
+
+    /// Issues one HTTP request with an optional body and returns the raw response.
+    fn raw_request(
+        addr: std::net::SocketAddr,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> String {
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let req = match body {
+            Some(b) => format!(
+                "{} {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                method, path, b.len(), b
+            ),
+            None => format!(
+                "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                method, path
+            ),
+        };
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    }
+
     /// The page must contain the floating slideshow popup container so the JS can
     /// show/hide it on demand.
     #[test]

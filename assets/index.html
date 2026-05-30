@@ -14,6 +14,7 @@
     <input id="path-input" type="text" placeholder="C:\path\to\folder" />
     <button id="path-go">Open</button>
   </span>
+  <span class="spinner" id="busy-spinner" hidden title="Working…"></span>
   <span class="status" id="status"></span>
 </header>
 
@@ -34,8 +35,9 @@
       <span id="image-name"></span>
       <button id="next-btn">Next ▶</button>
     </div>
-    <div class="image-frame">
+    <div class="image-frame" id="image-frame">
       <img id="viewer" alt="" />
+      <div class="img-spinner" id="img-spinner"></div>
     </div>
   </section>
 
@@ -56,6 +58,11 @@
       <button id="slideshow-open">▶ Slideshow Setup...</button>
       <button id="stop-btn">■ Stop</button>
     </div>
+
+    <h3>Search</h3>
+    <div class="row">
+      <button id="search-open">🔍 Search Images...</button>
+    </div>
   </aside>
 </main>
 
@@ -69,6 +76,10 @@
   </div>
   <div class="floating-body">
     <div class="slideshow-config">
+      <div class="row">
+        <input id="slideshow-base" type="text" placeholder="Base folder (recursive, blank = current folder)" />
+        <button id="slideshow-base-clear" title="Clear base folder">✕</button>
+      </div>
       <div id="hotkey-chips" class="chips"></div>
       <div class="row">
         <input id="filter-q" type="text" placeholder="Free word" />
@@ -91,6 +102,42 @@
       </div>
       <div id="filter-count" class="muted"></div>
       <ul id="filter-list" class="filter-list"></ul>
+    </div>
+  </div>
+</div>
+
+<!-- Floating recursive-search panel. Mirrors the slideshow popup: draggable
+     header, closeable, position persisted to localStorage. Searches a base
+     folder and all its subfolders, then bulk-exports the filtered results. -->
+<div class="floating hidden" id="search-popup" role="dialog" aria-label="Search Images">
+  <div class="floating-header" id="search-popup-header">
+    <span>🔍 Search Images</span>
+    <button class="floating-close" id="search-close" title="Close">✕</button>
+  </div>
+  <div class="floating-body">
+    <div class="slideshow-config">
+      <div class="row">
+        <input id="search-base" type="text" placeholder="Base folder (recursive)" />
+        <button id="search-btn">🔍 Search</button>
+      </div>
+      <div id="search-chips" class="chips"></div>
+      <div class="row">
+        <input id="search-q" type="text" placeholder="Free word" />
+      </div>
+      <div class="row">
+        <label>View
+          <select id="search-view">
+            <option value="names">Names</option>
+            <option value="thumbs">Thumbnails</option>
+          </select>
+        </label>
+      </div>
+      <div id="search-count" class="muted"></div>
+      <ul id="search-list" class="filter-list"></ul>
+      <div class="row">
+        <input id="search-dest" type="text" placeholder="Export destination folder" />
+        <button id="search-export">📤 Export</button>
+      </div>
     </div>
   </div>
 </div>

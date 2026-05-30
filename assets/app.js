@@ -7,6 +7,9 @@ const state = {
   tags: [],
   hotkeys: {},        // {keyChar: tag}
   selectedTags: new Set(),
+  searchSelectedTags: new Set(),
+  searchBase: null,    // base folder of the last successful recursive search
+  searchResults: [],   // [{path, rel}] from the last search
   slideshow: {
     timer: null,
     list: [],
@@ -27,14 +30,29 @@ function joinPath(dir, name) {
   return dir + PATH_SEP + name;
 }
 
+// Global busy indicator. Every fetch goes through api(), so reference-counting
+// here lights the top-bar spinner whenever any request is in flight — making it
+// clear the app is working rather than frozen, even on slow recursive scans.
+let busyCount = 0;
+function setBusy(delta) {
+  busyCount = Math.max(0, busyCount + delta);
+  const sp = $("busy-spinner");
+  if (sp) sp.hidden = busyCount === 0;
+}
+
 async function api(url, opts = {}) {
-  const r = await fetch(url, opts);
-  if (!r.ok) {
-    let msg = `${r.status} ${r.statusText}`;
-    try { const body = await r.json(); if (body.error) msg = body.error; } catch (_) {}
-    throw new Error(msg);
+  setBusy(1);
+  try {
+    const r = await fetch(url, opts);
+    if (!r.ok) {
+      let msg = `${r.status} ${r.statusText}`;
+      try { const body = await r.json(); if (body.error) msg = body.error; } catch (_) {}
+      throw new Error(msg);
+    }
+    return r;
+  } finally {
+    setBusy(-1);
   }
-  return r;
 }
 
 async function apiJson(url, opts = {}) {
@@ -98,7 +116,14 @@ function renderFileList() {
 
 async function openImage(path) {
   state.current = path;
-  $("viewer").src = `/api/image?path=${encodeURIComponent(path)}&t=${Date.now()}`;
+  const v = $("viewer");
+  const frame = $("image-frame");
+  // Show the overlay spinner until the image decodes, so a slow load during a
+  // slideshow reads as "loading next frame" rather than a frozen view.
+  if (frame) frame.classList.add("loading");
+  v.onload = () => frame && frame.classList.remove("loading");
+  v.onerror = () => frame && frame.classList.remove("loading");
+  v.src = `/api/image?path=${encodeURIComponent(path)}&t=${Date.now()}`;
   $("image-name").textContent = path.split(/[\\/]/).pop();
   renderFileList();
   await loadTags(path);
@@ -112,6 +137,8 @@ function closeImage() {
   const v = $("viewer");
   // Remove src so the broken-image icon doesn't show; CSS hides empty <img>.
   v.removeAttribute("src");
+  const frame = $("image-frame");
+  if (frame) frame.classList.remove("loading");
   $("image-name").textContent = "";
   renderTags();
   renderFileList();
@@ -190,6 +217,7 @@ async function loadHotkeys() {
     state.hotkeys = data.hotkeys || {};
     renderHotkeys();
     renderHotkeyChips();
+    renderSearchChips();
   } catch (e) {
     setStatus("Hotkeys: " + e.message);
   }
@@ -242,45 +270,57 @@ function refreshFilter() {
 }
 
 async function doRefreshFilter() {
-  if (!state.dir) return;
   const tags = Array.from(state.selectedTags).join(",");
   const q = $("filter-q").value;
-  const url = `/api/filter?path=${encodeURIComponent(state.dir)}&tags=${encodeURIComponent(tags)}&q=${encodeURIComponent(q)}`;
+  const base = $("slideshow-base").value.trim();
   try {
-    const data = await apiJson(url);
-    renderFilterList(data.matches || []);
+    if (base) {
+      // Recursive mode: search the base folder and all its subfolders. Each match
+      // carries an absolute path plus a base-relative label for display.
+      const url = `/api/search?path=${encodeURIComponent(base)}&tags=${encodeURIComponent(tags)}&q=${encodeURIComponent(q)}`;
+      const data = await apiJson(url);
+      renderFilterList((data.matches || []).map(m => ({ path: m.path, label: m.rel })));
+    } else {
+      // Current-folder mode: top level only.
+      if (!state.dir) { renderFilterList([]); return; }
+      const url = `/api/filter?path=${encodeURIComponent(state.dir)}&tags=${encodeURIComponent(tags)}&q=${encodeURIComponent(q)}`;
+      const data = await apiJson(url);
+      renderFilterList((data.matches || []).map(name => ({ path: joinPath(state.dir, name), label: name })));
+    }
   } catch (e) {
     setStatus("Filter: " + e.message);
   }
 }
 
-function renderFilterList(matches) {
-  $("filter-count").textContent = `Matched: ${matches.length}`;
+/// Renders the slideshow candidate list from `[{path, label}]` items. `path` is
+/// the absolute path used to open/thumbnail the image; `label` is what the user
+/// sees (a bare filename in current-folder mode, a relative path in recursive mode).
+function renderFilterList(items) {
+  $("filter-count").textContent = `Matched: ${items.length}`;
   const ul = $("filter-list");
   ul.innerHTML = "";
   const view = $("view-mode").value;
   // Toggle the layout class so the CSS grid switches on for thumbnail mode.
   ul.classList.toggle("thumbs-mode", view === "thumbs");
 
-  for (const name of matches) {
-    const fullPath = joinPath(state.dir, name);
+  for (const item of items) {
     const li = document.createElement("li");
-    li.dataset.path = fullPath;
-    // The browser tooltip surfaces the filename when truncated (names mode) or
+    li.dataset.path = item.path;
+    // The browser tooltip surfaces the label when truncated (names mode) or
     // entirely hidden (thumbs mode).
-    li.title = name;
+    li.title = item.label;
     if (view === "thumbs") {
       li.className = "thumb";
       const img = document.createElement("img");
-      img.src = `/api/thumb?path=${encodeURIComponent(fullPath)}&size=96`;
+      img.src = `/api/thumb?path=${encodeURIComponent(item.path)}&size=96`;
       img.loading = "lazy";
-      img.alt = name;
+      img.alt = item.label;
       li.appendChild(img);
     } else {
       li.className = "name";
-      li.textContent = name;
+      li.textContent = item.label;
     }
-    li.onclick = () => openImage(fullPath);
+    li.onclick = () => openImage(item.path);
     ul.appendChild(li);
   }
 }
@@ -316,6 +356,116 @@ function stopSlideshow() {
   if (state.slideshow.timer) {
     clearInterval(state.slideshow.timer);
     state.slideshow.timer = null;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Recursive search + bulk export
+// -----------------------------------------------------------------------------
+
+function openSearchPopup() {
+  // Default the base folder to the directory currently being browsed.
+  if (!$("search-base").value && state.dir) $("search-base").value = state.dir;
+  $("search-popup").classList.remove("hidden");
+}
+
+function closeSearchPopup() {
+  $("search-popup").classList.add("hidden");
+}
+
+function renderSearchChips() {
+  const wrap = $("search-chips");
+  wrap.innerHTML = "";
+  const keys = Object.keys(state.hotkeys).sort();
+  for (const key of keys) {
+    const tag = state.hotkeys[key];
+    const chip = document.createElement("span");
+    chip.className = "chip" + (state.searchSelectedTags.has(tag) ? " selected" : "");
+    chip.textContent = `[${key}] ${tag}`;
+    chip.onclick = () => {
+      if (state.searchSelectedTags.has(tag)) state.searchSelectedTags.delete(tag);
+      else state.searchSelectedTags.add(tag);
+      renderSearchChips();
+      refreshSearch();
+    };
+    wrap.appendChild(chip);
+  }
+}
+
+let searchDebounceTimer = null;
+function refreshSearch() {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(doSearch, 250);
+}
+
+async function doSearch() {
+  const base = $("search-base").value.trim();
+  if (!base) { setStatus("Enter a base folder to search"); return; }
+  const tags = Array.from(state.searchSelectedTags).join(",");
+  const q = $("search-q").value;
+  const url = `/api/search?path=${encodeURIComponent(base)}&tags=${encodeURIComponent(tags)}&q=${encodeURIComponent(q)}`;
+  setStatus("Searching…");
+  try {
+    const data = await apiJson(url);
+    state.searchBase = data.base;
+    state.searchResults = data.matches || [];
+    renderSearchList();
+    setStatus(`Search: ${state.searchResults.length} match(es)`);
+  } catch (e) {
+    setStatus("Search: " + e.message);
+  }
+}
+
+function renderSearchList() {
+  $("search-count").textContent = `Matched: ${state.searchResults.length}`;
+  const ul = $("search-list");
+  ul.innerHTML = "";
+  const view = $("search-view").value;
+  ul.classList.toggle("thumbs-mode", view === "thumbs");
+
+  for (const item of state.searchResults) {
+    const li = document.createElement("li");
+    li.dataset.path = item.path;
+    // Show the path relative to the search base so the subfolder is visible.
+    li.title = item.rel;
+    if (view === "thumbs") {
+      li.className = "thumb";
+      const img = document.createElement("img");
+      img.src = `/api/thumb?path=${encodeURIComponent(item.path)}&size=96`;
+      img.loading = "lazy";
+      img.alt = item.rel;
+      li.appendChild(img);
+    } else {
+      li.className = "name";
+      li.textContent = item.rel;
+    }
+    li.onclick = () => openImage(item.path);
+    ul.appendChild(li);
+  }
+}
+
+async function doExport() {
+  if (state.searchResults.length === 0) { setStatus("Nothing to export"); return; }
+  const dest = $("search-dest").value.trim();
+  if (!dest) { setStatus("Enter an export destination folder"); return; }
+  if (!state.searchBase) { setStatus("Run a search before exporting"); return; }
+  setStatus("Exporting…");
+  try {
+    const data = await apiJson("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        base: state.searchBase,
+        dest,
+        files: state.searchResults.map(r => r.path),
+      }),
+    });
+    const errs = data.errors || [];
+    setStatus(errs.length
+      ? `Exported ${data.copied}, ${errs.length} failed (${errs[0]})`
+      : `Exported ${data.copied} file(s) to ${dest}`);
+  } catch (e) {
+    setStatus("Export: " + e.message);
   }
 }
 
@@ -371,12 +521,31 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("filter-q").addEventListener("input", refreshFilter);
   $("filter-btn").onclick = doRefreshFilter;
   $("view-mode").addEventListener("change", doRefreshFilter);
+  $("slideshow-base").addEventListener("input", refreshFilter);
+  $("slideshow-base").addEventListener("keydown", e => {
+    if (e.key === "Enter") doRefreshFilter();
+  });
+  $("slideshow-base-clear").onclick = () => {
+    $("slideshow-base").value = "";
+    doRefreshFilter();
+  };
   $("start-btn").onclick = startSlideshow;
   $("stop-btn").onclick = () => { stopSlideshow(); setStatus("Slideshow stopped"); };
 
   $("slideshow-open").onclick = openSlideshowPopup;
   $("slideshow-close").onclick = closeSlideshowPopup;
   initFloatingDrag($("slideshow-popup"), $("slideshow-popup-header"), "tag_editor.slideshow_pos");
+
+  $("search-open").onclick = openSearchPopup;
+  $("search-close").onclick = closeSearchPopup;
+  $("search-btn").onclick = doSearch;
+  $("search-q").addEventListener("input", refreshSearch);
+  $("search-base").addEventListener("keydown", e => {
+    if (e.key === "Enter") doSearch();
+  });
+  $("search-view").addEventListener("change", renderSearchList);
+  $("search-export").onclick = doExport;
+  initFloatingDrag($("search-popup"), $("search-popup-header"), "tag_editor.search_pos");
 
   document.addEventListener("keydown", e => {
     // Ctrl+S works regardless of focus, mirroring the desktop behavior.

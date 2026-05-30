@@ -1,15 +1,16 @@
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::thumb_grid;
 use crate::filter;
 use crate::metadata::{self, is_metadata_supported};
+use crate::scan_task::ScanTask;
 use crate::state::{AppState, SlideshowListView};
 use crate::thumbnail_cache::ThumbnailCache;
 
 const THUMB_DIM: u32 = 96;
 const ROW_HEIGHT_NAMES: f32 = 20.0;
-const ROW_HEIGHT_THUMBS: f32 = 110.0;
 
 /// Renders the slideshow setup UI inside whatever context is supplied — the caller
 /// decides whether that context is a separate OS viewport or the main window.
@@ -18,20 +19,16 @@ pub fn draw_slideshow_dialog(
     state: &mut AppState,
     thumbs: &mut ThumbnailCache,
 ) {
+    // Stream in any results from an in-progress recursive scan before drawing.
+    poll_scan(state, ctx);
     refresh_cache_on_dir_change(state, thumbs);
-
-    let dir_label = state
-        .slideshow_dir
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "(none)".into());
 
     let mut start_clicked = false;
     let mut cancel_clicked = false;
 
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.heading("▶ Slideshow Setup");
-        ui.label(format!("Directory: {}", dir_label));
+        draw_source_picker(ui, state, thumbs);
 
         ui.separator();
         draw_hotkey_chips(ui, state);
@@ -41,11 +38,18 @@ pub fn draw_slideshow_dialog(
         draw_view_toggle(ui, &mut state.slideshow_dialog.view);
         ui.separator();
 
-        ui.label(format!(
-            "Matched: {} / {}",
-            state.slideshow_dialog.filtered.len(),
-            state.slideshow_dialog.tag_cache.len()
-        ));
+        if let Some(scan) = state.slideshow_dialog.scan.as_ref() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(scan.progress_label());
+            });
+        } else {
+            ui.label(format!(
+                "Matched: {} / {}",
+                state.slideshow_dialog.filtered.len(),
+                state.slideshow_dialog.tag_cache.len()
+            ));
+        }
 
         ui.separator();
 
@@ -79,7 +83,13 @@ pub fn draw_slideshow_dialog(
     }
 }
 
+/// Auto-loads the current directory's top-level images when it changes. Skipped
+/// while a recursive base folder is selected — in that mode the cache is owned by
+/// the background scan instead of the current directory.
 fn refresh_cache_on_dir_change(state: &mut AppState, thumbs: &mut ThumbnailCache) {
+    if state.slideshow_dialog.base_dir.is_some() {
+        return;
+    }
     let dir = state.slideshow_dir.clone();
     if dir == state.slideshow_dialog.last_dir {
         return;
@@ -91,6 +101,90 @@ fn refresh_cache_on_dir_change(state: &mut AppState, thumbs: &mut ThumbnailCache
     }
     state.slideshow_dialog.last_dir = dir;
     recompute_filtered(state);
+}
+
+/// Source selector: switch between the current directory (top level only) and a
+/// recursive base folder that includes every subfolder.
+fn draw_source_picker(ui: &mut egui::Ui, state: &mut AppState, thumbs: &mut ThumbnailCache) {
+    ui.horizontal(|ui| {
+        if ui.button("📁 Base folder (recursive)...").clicked() {
+            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                start_recursive_scan(state, thumbs, dir);
+            }
+        }
+        if state.slideshow_dialog.base_dir.is_some()
+            && ui.button("✕ Use current folder").clicked()
+        {
+            clear_base(state, thumbs);
+        }
+    });
+
+    let label = match state.slideshow_dialog.base_dir.as_ref() {
+        Some(base) => format!("Source: {} (recursive)", base.display()),
+        None => format!(
+            "Directory: {}",
+            state
+                .slideshow_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(none)".into())
+        ),
+    };
+    ui.label(label);
+}
+
+/// Starts a recursive background scan of `base`, switching the dialog into
+/// recursive mode. Results stream in via [`poll_scan`].
+fn start_recursive_scan(state: &mut AppState, thumbs: &mut ThumbnailCache, base: PathBuf) {
+    thumbs.clear();
+    let dialog = &mut state.slideshow_dialog;
+    dialog.base_dir = Some(base.clone());
+    dialog.tag_cache.clear();
+    dialog.filtered.clear();
+    dialog.scan = Some(ScanTask::spawn(base));
+    state.status_message = "Scanning…".to_string();
+}
+
+/// Reverts to current-directory mode. Resetting `last_dir` forces the next
+/// `refresh_cache_on_dir_change` to reload the current folder's top level.
+fn clear_base(state: &mut AppState, thumbs: &mut ThumbnailCache) {
+    thumbs.clear();
+    let dialog = &mut state.slideshow_dialog;
+    dialog.base_dir = None;
+    dialog.scan = None;
+    dialog.tag_cache.clear();
+    dialog.filtered.clear();
+    dialog.last_dir = None;
+}
+
+/// Drains the active recursive scan into the tag cache and refreshes the filter,
+/// keeping the window repainting until the scan completes.
+fn poll_scan(state: &mut AppState, ctx: &egui::Context) {
+    let mut loaded = Vec::new();
+    let (changed, done) = {
+        let Some(scan) = state.slideshow_dialog.scan.as_mut() else {
+            return;
+        };
+        let changed = scan.drain(|path, tags| loaded.push((path, tags)));
+        (changed, scan.done)
+    };
+
+    for (path, tags) in loaded {
+        state.slideshow_dialog.tag_cache.insert(path, tags);
+    }
+    if changed {
+        recompute_filtered(state);
+    }
+
+    if done {
+        let count = state.slideshow_dialog.tag_cache.len();
+        state.slideshow_dialog.scan = None;
+        state.status_message = format!("Scanned {} image(s)", count);
+        // Persist the freshly-populated tag cache so the next scan is near-instant.
+        crate::metadata::flush_cache();
+    } else {
+        ctx.request_repaint();
+    }
 }
 
 fn draw_hotkey_chips(ui: &mut egui::Ui, state: &mut AppState) {
@@ -155,50 +249,46 @@ fn draw_filtered_list(
     height: f32,
 ) {
     let view = state.slideshow_dialog.view;
-    let row_height = match view {
-        SlideshowListView::Names => ROW_HEIGHT_NAMES,
-        SlideshowListView::Thumbnails => ROW_HEIGHT_THUMBS,
-    };
     let total = state.slideshow_dialog.filtered.len();
+    // In recursive mode, label rows with their path relative to the base so the
+    // subfolder is visible; otherwise the bare file name is enough.
+    let base = state.slideshow_dialog.base_dir.as_deref();
 
-    egui::ScrollArea::vertical()
-        .max_height(height)
-        .show_rows(ui, row_height, total, |ui, row_range| {
-            for idx in row_range {
-                let path = &state.slideshow_dialog.filtered[idx];
-                draw_row(ui, thumbs, path, view);
-            }
-        });
-}
-
-fn draw_row(
-    ui: &mut egui::Ui,
-    thumbs: &mut ThumbnailCache,
-    path: &Path,
-    view: SlideshowListView,
-) {
     match view {
         SlideshowListView::Names => {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            ui.label(name);
+            egui::ScrollArea::vertical()
+                .max_height(height)
+                .auto_shrink([false, false])
+                .show_rows(ui, ROW_HEIGHT_NAMES, total, |ui, row_range| {
+                    for idx in row_range {
+                        draw_name_row(ui, &state.slideshow_dialog.filtered[idx], base);
+                    }
+                });
         }
         SlideshowListView::Thumbnails => {
-            // Thumbnail-only: filename is intentionally omitted to reduce noise.
-            // Hover for the path tooltip if needed.
-            let max = THUMB_DIM as f32;
-            let response = if let Some(tex) = thumbs.get(ui.ctx(), path, THUMB_DIM) {
-                ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(max, max)))
-            } else {
-                ui.add_sized(
-                    egui::vec2(max, max),
-                    egui::Label::new(egui::RichText::new("[no preview]").color(Color32::DARK_GRAY)),
-                )
-            };
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                response.on_hover_text(name);
-            }
+            thumb_grid::thumbnail_grid(
+                ui,
+                thumbs,
+                &state.slideshow_dialog.filtered,
+                base,
+                height,
+                THUMB_DIM,
+            );
         }
     }
+}
+
+fn draw_name_row(ui: &mut egui::Ui, path: &Path, base: Option<&Path>) {
+    let label = base
+        .and_then(|b| path.strip_prefix(b).ok())
+        .map(|rel| rel.display().to_string())
+        .unwrap_or_else(|| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string()
+        });
+    ui.label(label);
 }
 
 fn load_tag_cache(dir: &Path, cache: &mut HashMap<PathBuf, Vec<String>>) {

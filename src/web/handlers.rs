@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
+use rayon::prelude::*;
 use tiny_http::{Header, Request, Response};
 
 use super::router::json_response;
 use super::server_state::ServerState;
 use crate::filter;
 use crate::metadata::{self, is_image_file, is_metadata_supported};
+use crate::search;
 
 pub fn tree(query: &str) -> Response<io::Cursor<Vec<u8>>> {
     let params = parse_query(query);
@@ -152,10 +154,15 @@ pub fn filter(query: &str) -> Response<io::Cursor<Vec<u8>>> {
         Ok(e) => e,
         Err(e) => return error_json(500, &format!("read_dir failed: {}", e)),
     };
-    let mut matches: Vec<String> = entries
+    // Collect candidate paths first, then read+match their tags in parallel —
+    // tag loading is per-file disk I/O, so spreading it across cores is faster.
+    let candidates: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| is_metadata_supported(p))
+        .collect();
+    let mut matches: Vec<String> = candidates
+        .into_par_iter()
         .filter(|p| filter::matches(&metadata::load_tags(p), &required, &free_word))
         .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
         .collect();
@@ -165,9 +172,118 @@ pub fn filter(query: &str) -> Response<io::Cursor<Vec<u8>>> {
     json_response(200, body)
 }
 
+/// Recursively searches `path` and all its subfolders for tag-capable images
+/// matching the tag/free-word filter. Returns each match's absolute path plus
+/// its path relative to the search base (forward slashes, for display).
+pub fn search(query: &str) -> Response<io::Cursor<Vec<u8>>> {
+    let params = parse_query(query);
+    let Some(dir_str) = params.get("path") else {
+        return error_json(400, "missing 'path' parameter");
+    };
+    let base = PathBuf::from(dir_str);
+    if !base.is_dir() {
+        return error_json(400, "path is not a directory");
+    }
+
+    let required: HashSet<String> = params
+        .get("tags")
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let free_word = params.get("q").cloned().unwrap_or_default();
+
+    // Read+match every image's tags in parallel across rayon's thread pool;
+    // recursive scans touch many files, so overlapping the disk I/O is the win.
+    let mut matches: Vec<serde_json::Value> = search::collect_images_recursive(&base)
+        .into_par_iter()
+        .filter(|p| filter::matches(&metadata::load_tags(p), &required, &free_word))
+        .map(|p| {
+            let rel = relative_display(&base, &p);
+            serde_json::json!({ "path": p.display().to_string(), "rel": rel })
+        })
+        .collect();
+    matches.sort_by(|a, b| {
+        a["rel"]
+            .as_str()
+            .unwrap_or_default()
+            .to_lowercase()
+            .cmp(&b["rel"].as_str().unwrap_or_default().to_lowercase())
+    });
+
+    let body = serde_json::json!({
+        "base": base.display().to_string(),
+        "matches": matches,
+    })
+    .to_string();
+    json_response(200, body)
+}
+
+/// Bulk-copies the requested files into a destination folder, preserving each
+/// file's path relative to the search base so subfolders are reproduced and
+/// same-named files never collide. Body: `{"base","dest","files":[...]}`.
+pub fn export(request: &mut Request) -> Response<io::Cursor<Vec<u8>>> {
+    let mut body = String::new();
+    if let Err(e) = request.as_reader().read_to_string(&mut body) {
+        return error_json(400, &format!("read body failed: {}", e));
+    }
+    let value: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return error_json(400, "invalid JSON body"),
+    };
+
+    let Some(base) = value.get("base").and_then(|v| v.as_str()) else {
+        return error_json(400, "missing 'base'");
+    };
+    let Some(dest) = value.get("dest").and_then(|v| v.as_str()) else {
+        return error_json(400, "missing 'dest'");
+    };
+    let base = PathBuf::from(base);
+    let dest = PathBuf::from(dest);
+    if !base.is_dir() {
+        return error_json(400, "'base' is not a directory");
+    }
+    if dest.as_os_str().is_empty() {
+        return error_json(400, "'dest' must not be empty");
+    }
+    let Some(files) = value.get("files").and_then(|v| v.as_array()) else {
+        return error_json(400, "'files' must be an array");
+    };
+    let files: Vec<PathBuf> = files
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(PathBuf::from)
+        .collect();
+    if files.is_empty() {
+        return error_json(400, "'files' is empty");
+    }
+
+    let (copied, errors) = search::export_preserving_structure(&base, &files, &dest);
+    let body = serde_json::json!({
+        "ok": true,
+        "copied": copied,
+        "errors": errors,
+    })
+    .to_string();
+    json_response(200, body)
+}
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+/// Path of `file` relative to `base`, rendered with forward slashes so the
+/// browser displays subfolders consistently regardless of host OS.
+fn relative_display(base: &Path, file: &Path) -> String {
+    let rel = file.strip_prefix(base).unwrap_or(file);
+    rel.components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect::<Vec<_>>()
+        .join("/")
+}
 
 fn serve_file(request: Request, path: &Path) -> io::Result<()> {
     if !path.is_file() {

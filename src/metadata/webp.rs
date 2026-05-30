@@ -1,16 +1,38 @@
+use std::io::{Read, Seek, SeekFrom};
+
 use super::error::{MetadataError, Result};
 
 const RIFF: &[u8; 4] = b"RIFF";
 const WEBP: &[u8; 4] = b"WEBP";
 const XMP_ID: [u8; 4] = *b"XMP ";
 
-pub fn read_xmp(data: &[u8]) -> Option<String> {
-    for chunk in iter_chunks(data) {
-        if chunk.id == XMP_ID {
-            return std::str::from_utf8(chunk.data).ok().map(str::to_owned);
-        }
+/// Reads the XMP packet by walking RIFF chunk headers only. The `XMP ` chunk's
+/// data is read; every other chunk (including the large `VP8`/`VP8L` image data)
+/// is skipped with a seek, so the image body is never pulled into memory.
+pub fn read_xmp_streaming<R: Read + Seek>(r: &mut R) -> Option<String> {
+    let mut riff = [0u8; 12];
+    r.read_exact(&mut riff).ok()?;
+    if &riff[0..4] != RIFF || &riff[8..12] != WEBP {
+        return None;
     }
-    None
+
+    let mut header = [0u8; 8];
+    loop {
+        if r.read_exact(&mut header).is_err() {
+            return None;
+        }
+        let id: [u8; 4] = header[0..4].try_into().ok()?;
+        let size = u32::from_le_bytes(header[4..8].try_into().ok()?) as usize;
+        // RIFF chunks are padded to an even byte boundary.
+        let padded = size + (size & 1);
+
+        if id == XMP_ID {
+            let mut data = vec![0u8; size];
+            r.read_exact(&mut data).ok()?;
+            return std::str::from_utf8(&data).ok().map(str::to_owned);
+        }
+        r.seek(SeekFrom::Current(padded as i64)).ok()?;
+    }
 }
 
 pub fn write_xmp(data: &[u8], xmp: &[u8]) -> Result<Vec<u8>> {

@@ -35,6 +35,22 @@ input[type="text"], input[type="number"] { padding: 4px 8px; }
 .path-input-wrap input { flex: 1; min-width: 0; }
 .status { color: #aaa; font-size: 12px; min-width: 200px; text-align: right; }
 
+/* Spinning ring used both in the top bar (global busy) and over the image frame
+   (next-image loading). Makes it obvious the app is working rather than frozen. */
+@keyframes te-spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #555;
+  border-top-color: #6cb6ff;
+  border-radius: 50%;
+  animation: te-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.spinner[hidden] { display: none; }
+.topbar .spinner { width: 16px; height: 16px; }
+
 .layout {
   /* --left-w is updated by the JS splitter; persisted to localStorage. */
   --left-w: 240px;
@@ -153,6 +169,23 @@ input[type="text"], input[type="number"] { padding: 4px 8px; }
 .image-frame img[src=""] {
   display: none;
 }
+/* Centered overlay spinner shown while the next image decodes — during a
+   slideshow this distinguishes "loading the next frame" from "stuck". */
+.image-frame { position: relative; }
+.img-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 36px;
+  height: 36px;
+  margin: -18px 0 0 -18px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #6cb6ff;
+  border-radius: 50%;
+  animation: te-spin 0.7s linear infinite;
+  display: none;
+}
+.image-frame.loading .img-spinner { display: block; }
 
 .tag-list li {
   display: flex;

@@ -1,3 +1,5 @@
+use std::io::{Read, Seek, SeekFrom};
+
 use super::error::{MetadataError, Result};
 use crc32fast::Hasher;
 
@@ -6,13 +8,40 @@ const XMP_KEYWORD: &[u8] = b"XML:com.adobe.xmp";
 const ITXT: [u8; 4] = *b"iTXt";
 const IEND: [u8; 4] = *b"IEND";
 
-pub fn read_xmp(data: &[u8]) -> Option<String> {
-    for chunk in iter_chunks(data) {
-        if chunk.kind == ITXT && is_xmp_itxt(chunk.data) {
-            return parse_itxt_text(chunk.data).map(str::to_owned);
+/// Reads the XMP packet by walking chunk headers only, reading an `iTXt` chunk's
+/// data when it carries the XMP keyword and seeking past every other chunk's
+/// data + CRC. The image data (`IDAT`, often the bulk of the file) is skipped
+/// rather than read into memory.
+pub fn read_xmp_streaming<R: Read + Seek>(r: &mut R) -> Option<String> {
+    let mut sig = [0u8; 8];
+    r.read_exact(&mut sig).ok()?;
+    if &sig != SIGNATURE {
+        return None;
+    }
+
+    let mut header = [0u8; 8];
+    loop {
+        if r.read_exact(&mut header).is_err() {
+            return None;
+        }
+        let len = u32::from_be_bytes(header[0..4].try_into().ok()?) as usize;
+        let kind: [u8; 4] = header[4..8].try_into().ok()?;
+
+        if kind == IEND {
+            return None;
+        }
+        if kind == ITXT {
+            let mut data = vec![0u8; len];
+            r.read_exact(&mut data).ok()?;
+            r.seek(SeekFrom::Current(4)).ok()?; // skip CRC
+            if is_xmp_itxt(&data) {
+                return parse_itxt_text(&data).map(str::to_owned);
+            }
+        } else {
+            // Skip chunk data + 4-byte CRC without reading it.
+            r.seek(SeekFrom::Current((len + 4) as i64)).ok()?;
         }
     }
-    None
 }
 
 pub fn write_xmp(data: &[u8], xmp: &[u8]) -> Result<Vec<u8>> {

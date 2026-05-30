@@ -20,6 +20,8 @@ pub struct Config {
     pub left_window_size: Option<[f32; 2]>,
     pub right_window_size: Option<[f32; 2]>,
     pub slideshow_window_size: Option<[f32; 2]>,
+    #[serde(default)]
+    pub search_window_size: Option<[f32; 2]>,
     /// Width in points when the sidebar is docked.
     #[serde(default = "default_dock_width")]
     pub left_dock_width: f32,
@@ -59,6 +61,7 @@ impl Default for Config {
             left_window_size: None,
             right_window_size: None,
             slideshow_window_size: None,
+            search_window_size: None,
             left_dock_width: default_dock_width(),
             right_dock_width: default_dock_width(),
             web_port: default_web_port(),

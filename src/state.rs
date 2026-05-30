@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::file_tree::FileTree;
 use crate::image_viewer::ImageViewer;
 use crate::metadata::{self, is_image_file};
+use crate::scan_task::ScanTask;
 use crate::slideshow::Slideshow;
 
 #[derive(Clone, Copy)]
@@ -30,6 +31,12 @@ pub struct SlideshowDialog {
     /// Filtered subset, recomputed when criteria change.
     pub filtered: Vec<PathBuf>,
     pub last_dir: Option<PathBuf>,
+    /// Optional recursive base folder. When set, the slideshow list is built from a
+    /// recursive scan of this folder (and its subfolders) instead of the current
+    /// directory's top level. `None` keeps the original current-directory behavior.
+    pub base_dir: Option<PathBuf>,
+    /// Active background scan when `base_dir` is being (re)scanned. `None` when idle.
+    pub scan: Option<ScanTask>,
 }
 
 impl Default for SlideshowDialog {
@@ -42,6 +49,44 @@ impl Default for SlideshowDialog {
             tag_cache: HashMap::new(),
             filtered: Vec::new(),
             last_dir: None,
+            base_dir: None,
+            scan: None,
+        }
+    }
+}
+
+/// State for the recursive-search window. Unlike the slideshow dialog, the tag
+/// cache is built from an explicit recursive scan (potentially expensive) rather
+/// than auto-loading on directory change, so `scanned_dir` records which base
+/// the current `tag_cache` was built from.
+pub struct SearchDialog {
+    pub open: bool,
+    pub base_dir: Option<PathBuf>,
+    pub free_word: String,
+    pub selected_tags: HashSet<String>,
+    pub view: SlideshowListView,
+    /// All metadata-capable images found under `base_dir`, with their tags.
+    pub tag_cache: HashMap<PathBuf, Vec<String>>,
+    /// The base dir `tag_cache` was scanned from; `None` until the first scan.
+    pub scanned_dir: Option<PathBuf>,
+    /// Filtered subset, recomputed when criteria change.
+    pub filtered: Vec<PathBuf>,
+    /// Active background scan while a recursive scan is in progress. `None` when idle.
+    pub scan: Option<ScanTask>,
+}
+
+impl Default for SearchDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            base_dir: None,
+            free_word: String::new(),
+            selected_tags: HashSet::new(),
+            view: SlideshowListView::Names,
+            tag_cache: HashMap::new(),
+            scanned_dir: None,
+            filtered: Vec::new(),
+            scan: None,
         }
     }
 }
@@ -60,12 +105,15 @@ pub struct AppState {
     pub slideshow_dialog: SlideshowDialog,
     pub slideshow_dir: Option<PathBuf>,
 
+    pub search_dialog: SearchDialog,
+
     pub status_message: String,
 
     /// Sidebar OS-window state at the *previous* frame; used to detect first-frame open.
     pub was_left_sidebar_open: bool,
     pub was_right_sidebar_open: bool,
     pub was_slideshow_dialog_open: bool,
+    pub was_search_dialog_open: bool,
 
     /// Cached GPU texture for the currently displayed image. Cleared on image switch.
     pub current_texture: Option<egui::TextureHandle>,
@@ -88,10 +136,12 @@ impl AppState {
             new_tag_input: String::new(),
             slideshow_dialog: SlideshowDialog::default(),
             slideshow_dir: None,
+            search_dialog: SearchDialog::default(),
             status_message: String::new(),
             was_left_sidebar_open: false,
             was_right_sidebar_open: false,
             was_slideshow_dialog_open: false,
+            was_search_dialog_open: false,
             current_texture: None,
             current_texture_path: None,
             web_url: None,

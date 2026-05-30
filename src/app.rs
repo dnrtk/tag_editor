@@ -10,6 +10,7 @@ use crate::web::WebHandle;
 pub struct TagEditorApp {
     state: AppState,
     slideshow_thumbs: ThumbnailCache,
+    search_thumbs: ThumbnailCache,
     /// Holds the running web server. Replaced on port change so the old listener stops
     /// before a new one binds. None when the server is disabled or failed to start.
     web_handle: Option<WebHandle>,
@@ -47,6 +48,7 @@ impl TagEditorApp {
             web_settings_snapshot: WebSettings::from_config(&state.config),
             state,
             slideshow_thumbs: ThumbnailCache::default(),
+            search_thumbs: ThumbnailCache::default(),
             web_handle: None,
         };
         app.start_web_server();
@@ -113,6 +115,9 @@ impl eframe::App for TagEditorApp {
         if self.state.slideshow_dialog.open {
             self.draw_slideshow_dialog_viewport(ctx, main_rect);
         }
+        if self.state.search_dialog.open {
+            self.draw_search_dialog_viewport(ctx, main_rect);
+        }
 
         let undocked_left =
             self.state.config.show_left_sidebar && !self.state.config.left_sidebar_docked;
@@ -121,10 +126,13 @@ impl eframe::App for TagEditorApp {
         self.state.was_left_sidebar_open = undocked_left;
         self.state.was_right_sidebar_open = undocked_right;
         self.state.was_slideshow_dialog_open = self.state.slideshow_dialog.open;
+        self.state.was_search_dialog_open = self.state.search_dialog.open;
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         self.state.config.save();
+        // Periodically persisted by eframe; also flushes the tag cache to disk.
+        crate::metadata::flush_cache();
     }
 }
 
@@ -253,6 +261,41 @@ impl TagEditorApp {
 
                 if viewport_ctx.input(|i| i.viewport().close_requested()) {
                     state.slideshow_dialog.open = false;
+                }
+            },
+        );
+    }
+
+    fn draw_search_dialog_viewport(&mut self, ctx: &egui::Context, main_rect: egui::Rect) {
+        let is_first_open = !self.state.was_search_dialog_open;
+        let saved_size = self.state.config.search_window_size;
+
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("Search Images")
+            .with_min_inner_size([360.0, 320.0]);
+        if is_first_open {
+            let [w, h] = saved_size.unwrap_or([560.0, 600.0]);
+            let x = main_rect.center().x - w / 2.0;
+            let y = main_rect.center().y - h / 2.0;
+            builder = builder.with_position([x, y]).with_inner_size([w, h]);
+        }
+
+        let state = &mut self.state;
+        let thumbs = &mut self.search_thumbs;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("search_dialog"),
+            builder,
+            move |viewport_ctx, _class| {
+                input::handle_keyboard(state, viewport_ctx);
+
+                ui::draw_search_dialog(viewport_ctx, state, thumbs);
+
+                if let Some(rect) = viewport_ctx.input(|i| i.viewport().inner_rect) {
+                    state.config.search_window_size = Some([rect.width(), rect.height()]);
+                }
+
+                if viewport_ctx.input(|i| i.viewport().close_requested()) {
+                    state.search_dialog.open = false;
                 }
             },
         );

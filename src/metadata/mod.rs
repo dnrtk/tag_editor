@@ -1,6 +1,8 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+mod cache;
 mod error;
 mod format;
 mod jpeg;
@@ -11,14 +13,35 @@ mod xmp;
 pub use error::{MetadataError, Result};
 pub use format::{is_image_file, is_metadata_supported, ImageFormat};
 
+/// Persists the in-memory tag cache to disk. Call after a scan completes and on
+/// app exit so repeat scans of an unchanged library skip re-reading every file.
+pub fn flush_cache() {
+    cache::flush();
+}
+
+/// Loads an image's tags, serving them from the persistent mtime-keyed cache when
+/// the file is unchanged since it was last read.
 pub fn load_tags(path: &Path) -> Vec<String> {
+    cache::get_or_load(path, load_tags_uncached)
+}
+
+/// Reads tags straight from the file, bypassing the cache. Streams only the
+/// metadata segments — the image body is skipped via seek, so a multi-megabyte
+/// photo costs a few small reads instead of a full file read.
+fn load_tags_uncached(path: &Path) -> Vec<String> {
     let Some(format) = ImageFormat::from_path(path) else {
         return Vec::new();
     };
-    let Ok(data) = fs::read(path) else {
+    let Ok(file) = File::open(path) else {
         return Vec::new();
     };
-    extract_xmp(format, &data)
+    let mut reader = BufReader::new(file);
+    let packet = match format {
+        ImageFormat::Jpeg => jpeg::read_xmp_streaming(&mut reader),
+        ImageFormat::Png => png::read_xmp_streaming(&mut reader),
+        ImageFormat::Webp => webp::read_xmp_streaming(&mut reader),
+    };
+    packet
         .map(|xmp| xmp::parse_subjects(&xmp))
         .unwrap_or_default()
 }
@@ -29,6 +52,8 @@ pub fn save_tags(path: &Path, tags: &[String]) -> Result<()> {
     let original = fs::read(path)?;
     let new_data = embed_xmp(format, &original, xmp.as_bytes())?;
     fs::write(path, new_data)?;
+    // Drop the stale cached entry; the next read re-streams the just-written tags.
+    cache::invalidate(path);
     Ok(())
 }
 
@@ -70,14 +95,6 @@ pub fn find_images_with_tag(dir: &Path, tag: &str) -> Vec<PathBuf> {
         .collect();
     result.sort();
     result
-}
-
-fn extract_xmp(format: ImageFormat, data: &[u8]) -> Option<String> {
-    match format {
-        ImageFormat::Jpeg => jpeg::read_xmp(data),
-        ImageFormat::Png => png::read_xmp(data),
-        ImageFormat::Webp => webp::read_xmp(data),
-    }
 }
 
 fn embed_xmp(format: ImageFormat, data: &[u8], xmp: &[u8]) -> Result<Vec<u8>> {

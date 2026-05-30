@@ -7,6 +7,8 @@ mod filter;
 mod image_viewer;
 mod input;
 mod metadata;
+mod scan_task;
+mod search;
 mod slideshow;
 mod state;
 mod thumbnail_cache;

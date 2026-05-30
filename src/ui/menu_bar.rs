@@ -8,6 +8,7 @@ pub fn draw_menu_bar(ui: &mut egui::Ui, state: &mut AppState) {
         ui.menu_button("File", |ui| file_menu(ui, state));
         ui.menu_button("View", |ui| view_menu(ui, state));
         ui.menu_button("Slideshow", |ui| slideshow_menu(ui, state));
+        ui.menu_button("Search", |ui| search_menu(ui, state));
         ui.menu_button("Settings", |ui| settings_menu(ui, state));
 
         // Right-aligned utility buttons.
@@ -82,6 +83,23 @@ fn slideshow_menu(ui: &mut egui::Ui, state: &mut AppState) {
     }
     if state.slideshow.is_running && ui.button("Stop Slideshow").clicked() {
         state.slideshow.stop();
+        ui.close_menu();
+    }
+}
+
+fn search_menu(ui: &mut egui::Ui, state: &mut AppState) {
+    if ui.button("Search Images...").clicked() {
+        // Pre-fill the base folder with the current file-tree root for convenience;
+        // the user can still pick any other folder inside the window.
+        if state.search_dialog.base_dir.is_none() {
+            state.search_dialog.base_dir = state
+                .file_tree
+                .root
+                .as_ref()
+                .map(|r| r.path.clone())
+                .or_else(|| state.slideshow_dir.clone());
+        }
+        state.search_dialog.open = true;
         ui.close_menu();
     }
 }
