@@ -54,6 +54,23 @@ fn file_menu(ui: &mut egui::Ui, state: &mut AppState) {
         }
         ui.close_menu();
     }
+    if !state.config.shared_folders.is_empty() {
+        ui.menu_button("Open Shared Folder", |ui| {
+            // Clone first so we don't borrow `state.config` while mutating `state`.
+            let folders: Vec<(String, std::path::PathBuf)> = state
+                .config
+                .shared_folders
+                .iter()
+                .map(|f| (f.name.clone(), f.path.clone()))
+                .collect();
+            for (name, path) in folders {
+                if ui.button(format!("🔖 {}", name)).clicked() {
+                    state.open_path(path);
+                    ui.close_menu();
+                }
+            }
+        });
+    }
     ui.separator();
     if ui.button("Save Tags (Ctrl+S)").clicked() {
         state.save_tags();

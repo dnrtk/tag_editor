@@ -3,6 +3,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+/// A pre-registered folder that is reachable from the web UI and the desktop
+/// "Open Shared Folder" shortcut. When any are configured, the web server limits
+/// all file access to these folders and their subfolders.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SharedFolder {
+    pub name: String,
+    pub path: PathBuf,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub hotkey_tags: HashMap<String, String>,
@@ -33,6 +42,10 @@ pub struct Config {
     /// When false, the embedded web server is not started.
     #[serde(default = "default_true")]
     pub web_enabled: bool,
+    /// Folders reachable from the web UI / desktop shortcut. When non-empty, the
+    /// web server restricts all file access to these folders and their subfolders.
+    #[serde(default)]
+    pub shared_folders: Vec<SharedFolder>,
 }
 
 fn default_true() -> bool {
@@ -66,6 +79,7 @@ impl Default for Config {
             right_dock_width: default_dock_width(),
             web_port: default_web_port(),
             web_enabled: true,
+            shared_folders: Vec::new(),
         }
     }
 }
@@ -132,5 +146,29 @@ fn apply_exe_overrides(config: &mut Config, path: &std::path::Path) {
     }
     if let Some(enabled) = value.get("web_enabled").and_then(|v| v.as_bool()) {
         config.web_enabled = enabled;
+    }
+    if let Some(folders) = value.get("shared_folders").and_then(|v| v.as_array()) {
+        config.shared_folders.clear();
+        for entry in folders {
+            let Some(path) = entry.get("path").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            // Default the display name to the final path component when omitted.
+            let name = entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    PathBuf::from(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path)
+                        .to_string()
+                });
+            config.shared_folders.push(SharedFolder {
+                name,
+                path: PathBuf::from(path),
+            });
+        }
     }
 }

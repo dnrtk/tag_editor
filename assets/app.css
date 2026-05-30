@@ -127,6 +127,10 @@ input[type="text"], input[type="number"] { padding: 4px 8px; }
 .dir-list li:hover, .file-list li:hover, .filter-list li:hover { background: #2c2c2c; }
 .file-list li.current { background: #3a4a5a; font-weight: bold; }
 
+/* Generic show/hide toggle (the floating panels use their own .floating.hidden). */
+#roots-section.hidden { display: none; }
+#roots-list li { color: #d7b35a; }
+
 .center {
   display: flex;
   flex-direction: column;

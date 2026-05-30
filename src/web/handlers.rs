@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
@@ -13,17 +13,22 @@ use crate::filter;
 use crate::metadata::{self, is_image_file, is_metadata_supported};
 use crate::search;
 
-pub fn tree(query: &str) -> Response<io::Cursor<Vec<u8>>> {
+pub fn tree(query: &str, state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
     let params = parse_query(query);
+    let roots = shared_roots(state);
+    // With no path, land on the first shared folder when restricted, else home.
     let dir = match params.get("path") {
         Some(p) => PathBuf::from(p),
-        None => match home_dir() {
+        None => match roots.first().cloned().or_else(home_dir) {
             Some(d) => d,
             None => return error_json(400, "missing 'path' parameter"),
         },
     };
     if !dir.is_dir() {
         return error_json(400, "path is not a directory");
+    }
+    if !read_allowed(&dir, &roots) {
+        return access_denied();
     }
 
     let mut dirs: Vec<String> = Vec::new();
@@ -58,19 +63,25 @@ pub fn tree(query: &str) -> Response<io::Cursor<Vec<u8>>> {
     json_response(200, body)
 }
 
-pub fn image(request: Request, query: &str) -> io::Result<()> {
+pub fn image(request: Request, query: &str, state: &Arc<ServerState>) -> io::Result<()> {
     let path = match resolve_image_path(query) {
         Ok(p) => p,
         Err(msg) => return request.respond(error_json(400, msg)),
     };
+    if !read_allowed(&path, &shared_roots(state)) {
+        return request.respond(access_denied());
+    }
     serve_file(request, &path)
 }
 
-pub fn thumb(request: Request, query: &str) -> io::Result<()> {
+pub fn thumb(request: Request, query: &str, state: &Arc<ServerState>) -> io::Result<()> {
     let path = match resolve_image_path(query) {
         Ok(p) => p,
         Err(msg) => return request.respond(error_json(400, msg)),
     };
+    if !read_allowed(&path, &shared_roots(state)) {
+        return request.respond(access_denied());
+    }
     let params = parse_query(query);
     let size: u32 = params
         .get("size")
@@ -90,11 +101,14 @@ pub fn thumb(request: Request, query: &str) -> io::Result<()> {
     request.respond(response)
 }
 
-pub fn get_tags(query: &str) -> Response<io::Cursor<Vec<u8>>> {
+pub fn get_tags(query: &str, state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
     let path = match resolve_image_path(query) {
         Ok(p) => p,
         Err(msg) => return error_json(400, msg),
     };
+    if !read_allowed(&path, &shared_roots(state)) {
+        return access_denied();
+    }
     if !is_metadata_supported(&path) {
         return error_json(400, "format does not support tags");
     }
@@ -103,11 +117,18 @@ pub fn get_tags(query: &str) -> Response<io::Cursor<Vec<u8>>> {
     json_response(200, body)
 }
 
-pub fn put_tags(request: &mut Request, query: &str) -> Response<io::Cursor<Vec<u8>>> {
+pub fn put_tags(
+    request: &mut Request,
+    query: &str,
+    state: &Arc<ServerState>,
+) -> Response<io::Cursor<Vec<u8>>> {
     let path = match resolve_image_path(query) {
         Ok(p) => p,
         Err(msg) => return error_json(400, msg),
     };
+    if !read_allowed(&path, &shared_roots(state)) {
+        return access_denied();
+    }
     let mut body = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut body) {
         return error_json(400, &format!("read body failed: {}", e));
@@ -129,7 +150,25 @@ pub fn hotkeys(state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
     json_response(200, body)
 }
 
-pub fn filter(query: &str) -> Response<io::Cursor<Vec<u8>>> {
+/// Returns the pre-registered shared folders so the web UI can offer them as
+/// one-click open targets. `restricted` tells the client whether arbitrary path
+/// entry is allowed (false) or limited to these folders (true).
+pub fn roots(state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
+    let cfg = state.config.lock().expect("config mutex poisoned");
+    let folders: Vec<serde_json::Value> = cfg
+        .shared_folders
+        .iter()
+        .map(|f| serde_json::json!({ "name": f.name, "path": f.path.display().to_string() }))
+        .collect();
+    let body = serde_json::json!({
+        "restricted": !cfg.shared_folders.is_empty(),
+        "roots": folders,
+    })
+    .to_string();
+    json_response(200, body)
+}
+
+pub fn filter(query: &str, state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
     let params = parse_query(query);
     let Some(dir_str) = params.get("path") else {
         return error_json(400, "missing 'path' parameter");
@@ -137,6 +176,9 @@ pub fn filter(query: &str) -> Response<io::Cursor<Vec<u8>>> {
     let dir = PathBuf::from(dir_str);
     if !dir.is_dir() {
         return error_json(400, "path is not a directory");
+    }
+    if !read_allowed(&dir, &shared_roots(state)) {
+        return access_denied();
     }
 
     let required: HashSet<String> = params
@@ -175,7 +217,7 @@ pub fn filter(query: &str) -> Response<io::Cursor<Vec<u8>>> {
 /// Recursively searches `path` and all its subfolders for tag-capable images
 /// matching the tag/free-word filter. Returns each match's absolute path plus
 /// its path relative to the search base (forward slashes, for display).
-pub fn search(query: &str) -> Response<io::Cursor<Vec<u8>>> {
+pub fn search(query: &str, state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
     let params = parse_query(query);
     let Some(dir_str) = params.get("path") else {
         return error_json(400, "missing 'path' parameter");
@@ -183,6 +225,9 @@ pub fn search(query: &str) -> Response<io::Cursor<Vec<u8>>> {
     let base = PathBuf::from(dir_str);
     if !base.is_dir() {
         return error_json(400, "path is not a directory");
+    }
+    if !read_allowed(&base, &shared_roots(state)) {
+        return access_denied();
     }
 
     let required: HashSet<String> = params
@@ -225,7 +270,7 @@ pub fn search(query: &str) -> Response<io::Cursor<Vec<u8>>> {
 /// Bulk-copies the requested files into a destination folder, preserving each
 /// file's path relative to the search base so subfolders are reproduced and
 /// same-named files never collide. Body: `{"base","dest","files":[...]}`.
-pub fn export(request: &mut Request) -> Response<io::Cursor<Vec<u8>>> {
+pub fn export(request: &mut Request, state: &Arc<ServerState>) -> Response<io::Cursor<Vec<u8>>> {
     let mut body = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut body) {
         return error_json(400, &format!("read body failed: {}", e));
@@ -261,6 +306,16 @@ pub fn export(request: &mut Request) -> Response<io::Cursor<Vec<u8>>> {
         return error_json(400, "'files' is empty");
     }
 
+    // Enforce the allowlist: the source base and every source file must be inside
+    // a shared folder (read), and the destination must resolve inside one (write).
+    let roots = shared_roots(state);
+    if !read_allowed(&base, &roots) || files.iter().any(|f| !read_allowed(f, &roots)) {
+        return access_denied();
+    }
+    if !write_allowed(&dest, &roots) {
+        return access_denied();
+    }
+
     let (copied, errors) = search::export_preserving_structure(&base, &files, &dest);
     let body = serde_json::json!({
         "ok": true,
@@ -269,6 +324,66 @@ pub fn export(request: &mut Request) -> Response<io::Cursor<Vec<u8>>> {
     })
     .to_string();
     json_response(200, body)
+}
+
+// -----------------------------------------------------------------------------
+// Access control
+// -----------------------------------------------------------------------------
+
+/// Absolute paths of the configured shared folders (the allowlist). Empty means
+/// no restriction is configured.
+fn shared_roots(state: &ServerState) -> Vec<PathBuf> {
+    state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .shared_folders
+        .iter()
+        .map(|f| f.path.clone())
+        .collect()
+}
+
+/// True when `path` (which must exist) resolves inside one of the `roots`. With
+/// no roots configured, access is unrestricted (local single-PC use). Canonicalize
+/// resolves `..` and symlinks so a crafted path cannot escape an allowed root.
+fn read_allowed(path: &Path, roots: &[PathBuf]) -> bool {
+    if roots.is_empty() {
+        return true;
+    }
+    let Ok(canon) = path.canonicalize() else {
+        return false;
+    };
+    roots.iter().any(|root| {
+        root.canonicalize()
+            .map(|croot| canon.starts_with(croot))
+            .unwrap_or(false)
+    })
+}
+
+/// True when `path` is a safe write target inside the allowlist. The target may
+/// not exist yet (e.g. a new export subfolder), so we reject any `..` traversal
+/// and then verify the nearest existing ancestor sits inside a shared folder.
+fn write_allowed(path: &Path, roots: &[PathBuf]) -> bool {
+    if roots.is_empty() {
+        return true;
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    let mut ancestor = path;
+    loop {
+        if ancestor.exists() {
+            return read_allowed(ancestor, roots);
+        }
+        match ancestor.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => ancestor = parent,
+            _ => return false,
+        }
+    }
+}
+
+fn access_denied() -> Response<io::Cursor<Vec<u8>>> {
+    error_json(403, "access denied: path is outside the shared folders")
 }
 
 // -----------------------------------------------------------------------------

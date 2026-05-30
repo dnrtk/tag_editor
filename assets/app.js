@@ -6,6 +6,8 @@ const state = {
   current: null,      // absolute path of currently displayed image
   tags: [],
   hotkeys: {},        // {keyChar: tag}
+  roots: [],          // pre-registered shared folders [{name, path}]
+  restricted: false,  // true when the server limits access to the shared folders
   selectedTags: new Set(),
   searchSelectedTags: new Set(),
   searchBase: null,    // base folder of the last successful recursive search
@@ -61,6 +63,50 @@ async function apiJson(url, opts = {}) {
 }
 
 // -----------------------------------------------------------------------------
+// Shared folders (pre-registered open targets)
+// -----------------------------------------------------------------------------
+
+async function loadRoots() {
+  try {
+    const data = await apiJson("/api/roots");
+    state.roots = data.roots || [];
+    state.restricted = !!data.restricted;
+    renderRoots();
+  } catch (e) {
+    setStatus("Shared folders: " + e.message);
+  }
+}
+
+/// Normalizes a path for tolerant comparison: unify separators, drop a trailing
+/// slash, lowercase (host paths here are Windows, case-insensitive).
+function normPath(p) {
+  return String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function isRoot(p) {
+  const n = normPath(p);
+  return state.roots.some(r => normPath(r.path) === n);
+}
+
+function renderRoots() {
+  const section = $("roots-section");
+  const ul = $("roots-list");
+  ul.innerHTML = "";
+  if (state.roots.length === 0) {
+    section.classList.add("hidden");
+    return;
+  }
+  section.classList.remove("hidden");
+  for (const r of state.roots) {
+    const li = document.createElement("li");
+    li.textContent = "🔖 " + r.name;
+    li.title = r.path;
+    li.onclick = () => openDir(r.path);
+    ul.appendChild(li);
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Directory and file list
 // -----------------------------------------------------------------------------
 
@@ -73,7 +119,9 @@ async function openDir(dir) {
     $("path-input").value = data.path;
 
     const parentLink = $("parent-link");
-    if (data.parent) {
+    // Hide the up-link at a shared root under restriction — its parent is outside
+    // the allowlist and would 403 anyway.
+    if (data.parent && !(state.restricted && isRoot(data.path))) {
       parentLink.innerHTML = `<a id="go-parent">⬆ ${data.parent}</a>`;
       $("go-parent").onclick = () => openDir(data.parent);
     } else {
@@ -565,7 +613,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   initSplitter();
   await loadHotkeys();
-  // Default landing dir comes from the server (home dir) when no path is supplied.
+  await loadRoots();
+  // Default landing dir comes from the server when no path is supplied: the first
+  // shared folder when access is restricted, otherwise the home directory.
   await openDir("");
 });
 

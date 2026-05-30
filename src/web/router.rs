@@ -22,22 +22,23 @@ pub fn dispatch(mut request: Request, state: &Arc<ServerState>) {
             "text/css; charset=utf-8",
             assets::APP_CSS.to_string(),
         ))),
-        (Method::Get, "/api/tree") => Some(handlers::tree(query)),
+        (Method::Get, "/api/tree") => Some(handlers::tree(query, state)),
         (Method::Get, "/api/image") => {
-            let _ = handlers::image(request, query);
+            let _ = handlers::image(request, query, state);
             return;
         }
         (Method::Get, "/api/thumb") => {
-            let _ = handlers::thumb(request, query);
+            let _ = handlers::thumb(request, query, state);
             return;
         }
-        (Method::Get, "/api/tags") => Some(handlers::get_tags(query)),
-        (Method::Put, "/api/tags") => Some(handlers::put_tags(&mut request, query)),
-        (Method::Post, "/api/tags") => Some(handlers::put_tags(&mut request, query)),
+        (Method::Get, "/api/tags") => Some(handlers::get_tags(query, state)),
+        (Method::Put, "/api/tags") => Some(handlers::put_tags(&mut request, query, state)),
+        (Method::Post, "/api/tags") => Some(handlers::put_tags(&mut request, query, state)),
         (Method::Get, "/api/hotkeys") => Some(handlers::hotkeys(state)),
-        (Method::Get, "/api/filter") => Some(handlers::filter(query)),
-        (Method::Get, "/api/search") => Some(handlers::search(query)),
-        (Method::Post, "/api/export") => Some(handlers::export(&mut request)),
+        (Method::Get, "/api/roots") => Some(handlers::roots(state)),
+        (Method::Get, "/api/filter") => Some(handlers::filter(query, state)),
+        (Method::Get, "/api/search") => Some(handlers::search(query, state)),
+        (Method::Post, "/api/export") => Some(handlers::export(&mut request, state)),
         _ => None,
     };
 
