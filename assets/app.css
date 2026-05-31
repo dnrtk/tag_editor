@@ -173,6 +173,64 @@ input[type="text"], input[type="number"] { padding: 4px 8px; }
 .image-frame img[src=""] {
   display: none;
 }
+
+/* Left/right edge tap zones for prev/next. Hidden until an image is shown.
+   The arrow glyph is faint by default and brightens on hover; on touch devices
+   (no hover) it stays softly visible so the affordance is discoverable. */
+.nav-zone { display: none; }
+.image-frame.has-image .nav-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20%;
+  display: flex;
+  align-items: center;
+  font-size: 44px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 3;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.nav-prev { left: 0; justify-content: flex-start; padding-left: 10px; }
+.nav-next { right: 0; justify-content: flex-end; padding-right: 10px; }
+.image-frame.has-image .nav-prev:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.35), transparent);
+}
+.image-frame.has-image .nav-next:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: linear-gradient(to left, rgba(0, 0, 0, 0.35), transparent);
+}
+@media (hover: none) {
+  .image-frame.has-image .nav-zone { color: rgba(255, 255, 255, 0.4); }
+}
+
+/* Hotkey-tag overlay on the image (mirrors the desktop): each currently-applied
+   hotkey tag shown top-left as "[key] tag". Non-interactive so taps pass through
+   to the image / nav zones. */
+.tag-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 4;
+}
+.overlay-tag {
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid #808080;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 14px;
+  color: #fff;
+  white-space: nowrap;
+}
 /* Centered overlay spinner shown while the next image decodes — during a
    slideshow this distinguishes "loading the next frame" from "stuck". */
 .image-frame { position: relative; }

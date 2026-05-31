@@ -1,0 +1,8 @@
+# Keep the build context small and reproducible. The Dockerfile only copies
+# Cargo.toml/Cargo.lock, src/ and assets/, but excluding these avoids accidentally
+# shipping the (huge) host build output or VCS data.
+target
+.git
+*.tar
+docs
+deploy

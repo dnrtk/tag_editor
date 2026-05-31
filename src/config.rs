@@ -36,7 +36,11 @@ pub struct Config {
     pub left_dock_width: f32,
     #[serde(default = "default_dock_width")]
     pub right_dock_width: f32,
-    /// HTTP port for the embedded web server. Bound on 0.0.0.0.
+    /// Host/interface the embedded web server binds to. "0.0.0.0" exposes it to
+    /// peers on the LAN; "127.0.0.1" restricts access to the local machine.
+    #[serde(default = "default_web_host")]
+    pub web_host: String,
+    /// HTTP port for the embedded web server.
     #[serde(default = "default_web_port")]
     pub web_port: u16,
     /// When false, the embedded web server is not started.
@@ -59,6 +63,10 @@ fn default_dock_width() -> f32 {
 fn default_web_port() -> u16 {
     47823
 }
+/// Bind on all interfaces by default to preserve LAN reachability.
+fn default_web_host() -> String {
+    "0.0.0.0".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -77,6 +85,7 @@ impl Default for Config {
             search_window_size: None,
             left_dock_width: default_dock_width(),
             right_dock_width: default_dock_width(),
+            web_host: default_web_host(),
             web_port: default_web_port(),
             web_enabled: true,
             shared_folders: Vec::new(),
@@ -138,6 +147,9 @@ fn apply_exe_overrides(config: &mut Config, path: &std::path::Path) {
                 config.hotkey_tags.insert(key.clone(), tag.to_string());
             }
         }
+    }
+    if let Some(host) = value.get("web_host").and_then(|v| v.as_str()) {
+        config.web_host = host.to_string();
     }
     if let Some(port) = value.get("web_port").and_then(|v| v.as_u64()) {
         if port <= u16::MAX as u64 {

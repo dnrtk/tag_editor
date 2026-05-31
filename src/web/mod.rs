@@ -36,12 +36,18 @@ impl WebHandle {
 /// Spawn the embedded HTTP server on a background thread. Returns a handle on success,
 /// or the underlying error message if the listener could not be created.
 ///
-/// The server binds to `0.0.0.0:<port>` so it is reachable from peers on the same LAN.
+/// The server binds to `<web_host>:<port>`. With the default host `0.0.0.0` it is
+/// reachable from peers on the same LAN; set `web_host` to `127.0.0.1` to restrict
+/// access to the local machine.
 pub fn spawn(config: Config) -> Result<WebHandle, String> {
+    let host = config.web_host.clone();
     let port = config.web_port;
-    let bind = format!("0.0.0.0:{}", port);
+    let bind = format!("{}:{}", host, port);
 
-    let server = tiny_http::Server::http(&bind).map_err(|e| e.to_string())?;
+    // Include the bind address in the error so a bad `web_host` (e.g. an IP this
+    // machine/container doesn't own, or a network address like x.x.x.0) is obvious.
+    let server =
+        tiny_http::Server::http(&bind).map_err(|e| format!("failed to bind {}: {}", bind, e))?;
     let server = Arc::new(server);
     let state = Arc::new(ServerState::new(config));
 

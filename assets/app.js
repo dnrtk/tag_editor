@@ -19,17 +19,21 @@ const state = {
   },
 };
 
-const PATH_SEP = (() => {
-  // Heuristic: if the user types a Windows-style absolute path, use '\\' as separator.
-  return navigator.platform.startsWith("Win") ? "\\" : "/";
-})();
-
 function $(id) { return document.getElementById(id); }
 function setStatus(msg) { $("status").textContent = msg; }
 
+/// Picks the path separator from the server-side path itself — NOT the browser's
+/// OS. A Windows browser must still drive a Linux server (and vice versa), so the
+/// separator has to follow the path the server returned, e.g. "/data" -> "/".
+function pathSep(dir) {
+  // Windows paths contain a backslash or a bare drive-letter prefix; else POSIX.
+  if (dir.includes("\\") || /^[A-Za-z]:$/.test(dir)) return "\\";
+  return "/";
+}
+
 function joinPath(dir, name) {
   if (dir.endsWith("/") || dir.endsWith("\\")) return dir + name;
-  return dir + PATH_SEP + name;
+  return dir + pathSep(dir) + name;
 }
 
 // Global busy indicator. Every fetch goes through api(), so reference-counting
@@ -168,7 +172,10 @@ async function openImage(path) {
   const frame = $("image-frame");
   // Show the overlay spinner until the image decodes, so a slow load during a
   // slideshow reads as "loading next frame" rather than a frozen view.
-  if (frame) frame.classList.add("loading");
+  if (frame) {
+    frame.classList.add("loading");
+    frame.classList.add("has-image");
+  }
   v.onload = () => frame && frame.classList.remove("loading");
   v.onerror = () => frame && frame.classList.remove("loading");
   v.src = `/api/image?path=${encodeURIComponent(path)}&t=${Date.now()}`;
@@ -186,7 +193,7 @@ function closeImage() {
   // Remove src so the broken-image icon doesn't show; CSS hides empty <img>.
   v.removeAttribute("src");
   const frame = $("image-frame");
-  if (frame) frame.classList.remove("loading");
+  if (frame) frame.classList.remove("loading", "has-image");
   $("image-name").textContent = "";
   renderTags();
   renderFileList();
@@ -214,6 +221,29 @@ function renderTags() {
     btn.onclick = () => removeTag(tag);
     li.appendChild(btn);
     ul.appendChild(li);
+  }
+  renderHotkeyOverlay();
+}
+
+/// Overlays the currently-applied hotkey tags on the image, mirroring the desktop:
+/// each shown top-left as "[key] tag", grouping multiple keys mapped to one tag.
+function renderHotkeyOverlay() {
+  const wrap = $("tag-overlay");
+  wrap.innerHTML = "";
+  if (!state.current) return;
+  const tagKeys = {};
+  for (const [key, tag] of Object.entries(state.hotkeys)) {
+    (tagKeys[tag] ||= []).push(key);
+  }
+  for (const t in tagKeys) tagKeys[t].sort();
+  // Visit tags in their current order so the overlay matches the sidebar list.
+  for (const tag of state.tags) {
+    const keys = tagKeys[tag];
+    if (!keys) continue;
+    const span = document.createElement("span");
+    span.className = "overlay-tag";
+    span.textContent = keys.map(k => `[${k}]`).join("") + " " + tag;
+    wrap.appendChild(span);
   }
 }
 
@@ -266,6 +296,7 @@ async function loadHotkeys() {
     renderHotkeys();
     renderHotkeyChips();
     renderSearchChips();
+    renderHotkeyOverlay();
   } catch (e) {
     setStatus("Hotkeys: " + e.message);
   }
@@ -555,6 +586,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   $("prev-btn").onclick = () => navigate(-1);
   $("next-btn").onclick = () => navigate(1);
+  // Edge tap zones over the image step prev/next, mirroring the arrow keys.
+  $("nav-prev").onclick = () => navigate(-1);
+  $("nav-next").onclick = () => navigate(1);
+  initSwipe($("image-frame"));
   $("save-btn").onclick = saveTags;
   $("add-btn").onclick = () => {
     addTag($("new-tag").value);
@@ -676,6 +711,30 @@ function initFloatingDrag(panel, handle, storageKey) {
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+/// Horizontal swipe over the image steps prev/next (touch only). A left swipe goes
+/// to the next image, a right swipe to the previous — matching the edge tap zones.
+function initSwipe(el) {
+  if (!el) return;
+  let startX = null;
+  let startY = null;
+  el.addEventListener("touchstart", e => {
+    const t = e.changedTouches[0];
+    startX = t.clientX;
+    startY = t.clientY;
+  }, { passive: true });
+  el.addEventListener("touchend", e => {
+    if (startX === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    startX = null;
+    // Require a mostly-horizontal swipe past a threshold so taps/scrolls don't trigger it.
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      navigate(dx < 0 ? 1 : -1);
+    }
+  }, { passive: true });
 }
 
 /// Drag handle between left sidebar and center pane. The chosen width is persisted

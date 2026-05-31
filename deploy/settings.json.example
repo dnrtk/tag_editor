@@ -1,0 +1,11 @@
+{
+  "web_enabled": true,
+  "web_port": 47823,
+  "shared_folders": [
+    { "name": "Photos", "path": "/data" }
+  ],
+  "hotkey_tags": {
+    "1": "favorite",
+    "2": "review"
+  }
+}
